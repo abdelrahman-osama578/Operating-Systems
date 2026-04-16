@@ -1,0 +1,22 @@
+semWait userInput
+assign x input
+assign y input
+semSignal userInput
+semWait userOutput
+printFromTo x y
+print x
+print y
+print x
+print y
+print x
+print y
+print x
+print y
+print x
+print y
+print x
+print y
+semSignal userOutput
+VAR_x=10
+VAR_y=29
+EMPTY_VAR
