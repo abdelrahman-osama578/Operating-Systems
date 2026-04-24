@@ -6,6 +6,8 @@ import javax.swing.border.TitledBorder;
 import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.awt.geom.Path2D;
 import java.util.List;
 import java.util.Comparator;
@@ -35,8 +37,10 @@ public class OSDashboard extends JFrame {
     private OperatingSystem os;
     private Thread osThread;
     
-    // NEW: Tracks the exact memory address to highlight
     private int currentExecutingAddress = -1;
+    
+    // NEW: Boolean flag to track the current display format of the Address column
+    private boolean isHexFormat = true;
 
     public OSDashboard() {
         setTitle("Project X - OS Simulator");
@@ -256,6 +260,14 @@ public class OSDashboard extends JFrame {
         return tf;
     }
 
+    private void toggleAddressFormat() {
+        isHexFormat = !isHexFormat;
+        for (int i = 0; i < 40; i++) {
+            memoryTableModel.setValueAt(isHexFormat ? String.format("0x%04X", i) : String.valueOf(i), i, 0);
+        }
+        memoryTable.repaint();
+    }
+
     private JPanel createMemoryPanel() {
         JPanel panel = new JPanel(new BorderLayout()); panel.setBackground(PANEL_DARK);
         panel.setBorder(createStyledTitledBorder("MAIN MEMORY / 40 WORDS"));
@@ -267,19 +279,17 @@ public class OSDashboard extends JFrame {
         memoryTable.getTableHeader().setFont(new Font("SansSerif", Font.BOLD, 16)); 
         memoryTable.setRowHeight(32); memoryTable.setFont(new Font("Monospaced", Font.PLAIN, 16)); 
 
-        // --- NEW: CUSTOM CELL RENDERER FOR HIGHLIGHTING ---
         memoryTable.setDefaultRenderer(Object.class, new DefaultTableCellRenderer() {
             @Override
             public Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int column) {
                 Component c = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
                 
-                // If this is the currently executing memory address, highlight it blue!
                 if (row == currentExecutingAddress) {
-                    c.setBackground(new Color(41, 128, 185)); // Bright Blue
+                    c.setBackground(new Color(41, 128, 185)); 
                     c.setForeground(Color.WHITE);
                     setFont(new Font("Monospaced", Font.BOLD, 16));
                 } else {
-                    c.setBackground(BG_DARK); // Normal Dark Background
+                    c.setBackground(BG_DARK); 
                     c.setForeground(TEXT_LIGHT);
                     setFont(new Font("Monospaced", Font.PLAIN, 16));
                 }
@@ -287,7 +297,34 @@ public class OSDashboard extends JFrame {
             }
         });
 
-        for (int i = 0; i < 40; i++) { memoryTableModel.setValueAt(String.format("0x%04X", i), i, 0); memoryTableModel.setValueAt("NULL", i, 1); }
+        for (int i = 0; i < 40; i++) { 
+            memoryTableModel.setValueAt(String.format("0x%04X", i), i, 0); 
+            memoryTableModel.setValueAt("NULL", i, 1); 
+        }
+
+        // --- NEW: Add Mouse Listeners to toggle Address Format ---
+        
+        // 1. Listen for clicks on the Table Cells
+        memoryTable.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                int col = memoryTable.columnAtPoint(e.getPoint());
+                if (col == 0) { // Only toggle if they click the Address column
+                    toggleAddressFormat();
+                }
+            }
+        });
+
+        // 2. Listen for clicks on the Table Header ("Address" title)
+        memoryTable.getTableHeader().addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                int col = memoryTable.columnAtPoint(e.getPoint());
+                if (col == 0) {
+                    toggleAddressFormat();
+                }
+            }
+        });
 
         JScrollPane scrollPane = new JScrollPane(memoryTable); scrollPane.getViewport().setBackground(BG_DARK);
         scrollPane.setBorder(null); panel.add(scrollPane, BorderLayout.CENTER); return panel;
@@ -335,23 +372,21 @@ public class OSDashboard extends JFrame {
         button.setCursor(new Cursor(Cursor.HAND_CURSOR)); return button;
     }
 
-    // --- NEW: Added activeMemoryAddress for Highlighting and Auto-scrolling ---
     public void updateDashboard(int currentClock, String currentProcess, String currentInstruction, int activeMemoryAddress, String[] memoryState, String logs) {
         clockLabel.setText("SYSTEM CLOCK: " + currentClock);
         currentProcessLabel.setText("ACTIVE THREAD: " + currentProcess);
         currentInstructionLabel.setText("Instruction: " + currentInstruction);
         appendLog(logs); 
         
-        // 1. Update the table content
-        for (int i = 0; i < 40; i++) memoryTableModel.setValueAt(memoryState[i] == null ? "NULL" : memoryState[i], i, 1);
+        for (int i = 0; i < 40; i++) {
+            // Apply the format based on the user's toggle state!
+            memoryTableModel.setValueAt(isHexFormat ? String.format("0x%04X", i) : String.valueOf(i), i, 0); 
+            memoryTableModel.setValueAt(memoryState[i] == null ? "NULL" : memoryState[i], i, 1);
+        }
         
-        // 2. Set the highlighted row
         this.currentExecutingAddress = activeMemoryAddress;
-        
-        // 3. Force table to repaint the new highlight
         memoryTable.repaint();
         
-        // 4. AUTO-SCROLL logic (if the address is valid, scroll to it!)
         if (activeMemoryAddress >= 0 && activeMemoryAddress < 40) {
             memoryTable.scrollRectToVisible(memoryTable.getCellRect(activeMemoryAddress, 0, true));
         }

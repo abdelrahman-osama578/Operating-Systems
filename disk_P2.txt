@@ -5,6 +5,10 @@ semSignal userInput
 semWait file
 writeFile a b
 semSignal file
-VAR_a=file
-VAR_b=data
 EMPTY_VAR
+EMPTY_VAR
+EMPTY_VAR
+PCB_ID=2
+PCB_State=READY
+PCB_PC=0
+PCB_Bounds=14-27

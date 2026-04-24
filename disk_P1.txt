@@ -4,19 +4,11 @@ assign y input
 semSignal userInput
 semWait userOutput
 printFromTo x y
-print x
-print y
-print x
-print y
-print x
-print y
-print x
-print y
-print x
-print y
-print x
-print y
 semSignal userOutput
-VAR_x=10
-VAR_y=29
+VAR_x=4
+VAR_y=9
 EMPTY_VAR
+PCB_ID=1
+PCB_State=READY
+PCB_PC=6
+PCB_Bounds=0-13

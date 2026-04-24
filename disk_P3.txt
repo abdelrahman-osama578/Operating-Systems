@@ -7,6 +7,10 @@ semSignal file
 semWait userOutput
 print b
 semSignal userOutput
+VAR_a=5
 EMPTY_VAR
 EMPTY_VAR
-EMPTY_VAR
+PCB_ID=3
+PCB_State=READY
+PCB_PC=4
+PCB_Bounds=0-15

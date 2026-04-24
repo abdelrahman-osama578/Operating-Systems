@@ -58,6 +58,7 @@ public class OperatingSystem {
     public void shutdown() { isRunning = false; stepSemaphore.release(); }
 
     public void runSchedulerRR() {
+    	checkForNewArrivals(clock);
         System.out.println("OS Booted (Round Robin). Waiting for first cycle...");
         printSystemState(null); pauseExecution();       
 
@@ -81,7 +82,6 @@ public class OperatingSystem {
             while (isRunning && instructionsExecuted < timeSlice && currentProcess.state == State.RUNNING) {
                 boolean executed = executeInstruction(currentProcess);
                 
-                // --- THE FIX: INSTANTLY FREE MEMORY WHEN FINISHED ---
                 if (!executed && currentProcess.state == State.FINISHED) {
                     currentProcess.finishTime = clock; 
                     freeMemory(currentProcess);
@@ -107,6 +107,7 @@ public class OperatingSystem {
     }
 
     public void runSchedulerHRRN() {
+    	checkForNewArrivals(clock);
         System.out.println("OS Booted (HRRN). Waiting for first cycle...");
         printSystemState(null); pauseExecution();
 
@@ -136,7 +137,6 @@ public class OperatingSystem {
             while (isRunning && currentProcess.state == State.RUNNING) {
                 boolean executed = executeInstruction(currentProcess);
                 
-                // --- THE FIX: INSTANTLY FREE MEMORY WHEN FINISHED ---
                 if (!executed && currentProcess.state == State.FINISHED) {
                     currentProcess.finishTime = clock;
                     freeMemory(currentProcess);
@@ -155,6 +155,7 @@ public class OperatingSystem {
     }
 
     public void runSchedulerMLFQ() {
+    	checkForNewArrivals(clock);
         System.out.println("OS Booted (MLFQ). Waiting for first cycle...");
         printSystemState(null); pauseExecution();
 
@@ -181,7 +182,6 @@ public class OperatingSystem {
             while (isRunning && currentProcess.quantumUsed < currentQuantum && currentProcess.state == State.RUNNING) {
                 boolean executed = executeInstruction(currentProcess);
                 
-                // --- THE FIX: INSTANTLY FREE MEMORY WHEN FINISHED ---
                 if (!executed && currentProcess.state == State.FINISHED) {
                     currentProcess.finishTime = clock;
                     freeMemory(currentProcess);
@@ -226,7 +226,6 @@ public class OperatingSystem {
     // GARBAGE COLLECTION & SWAPPING ENGINE
     // ==========================================
     
-    // NEW: Deletes "Zombie" processes to prevent memory leaks
     private void freeMemory(PCB p) {
         if (p.minMemoryBoundary != -1) {
             for (int i = p.minMemoryBoundary; i <= p.maxMemoryBoundary; i++) {
@@ -241,19 +240,18 @@ public class OperatingSystem {
     private void ensureInMemory(PCB p) {
         if (p.minMemoryBoundary != -1) return; 
 
-        int requiredSpace = p.burstTime + 3;
+        // EXACT MATH: 3 variables + 4 PCB values = 7 extra words per process
+        int requiredSpace = p.burstTime + 7;
         int loc = allocateMemorySpace(requiredSpace);
         
         while (loc == -1) {
             PCB victim = null;
-            // 1. Try to swap out a blocked process first
             for (PCB other : allProcesses) { if (other.processID != p.processID && other.minMemoryBoundary != -1 && other.state == State.BLOCKED) { victim = other; break; } }
-            // 2. Try to swap out a ready process
             if (victim == null) { for (PCB other : allProcesses) { if (other.processID != p.processID && other.minMemoryBoundary != -1 && other.state == State.READY) { victim = other; break; } } }
-            // 3. Fallback: Evict finished zombies just in case
             if (victim == null) { for (PCB other : allProcesses) { if (other.processID != p.processID && other.minMemoryBoundary != -1 && other.state == State.FINISHED) { victim = other; break; } } }
 
             if (victim != null) {
+                syncAllPCBsToMemory(); // Ensure latest state is written before dumping to text file
                 memory.swapToDisk(victim);
                 if(gui != null) {
                     String msg = "MEMORY FULL! PROCESS ID: [" + victim.processID + "] is being swapped OUT to Disk.";
@@ -262,7 +260,7 @@ public class OperatingSystem {
                 }
                 victim.minMemoryBoundary = -1; victim.maxMemoryBoundary = -1;
                 loc = allocateMemorySpace(requiredSpace);
-            } else { break; } // Catastrophic memory failure (Process requires more than 40 words total)
+            } else { break; } 
         }
 
         if (loc != -1) {
@@ -273,6 +271,18 @@ public class OperatingSystem {
                 try { javax.swing.SwingUtilities.invokeAndWait(() -> gui.showSwapNotification(msg, "CRITICAL: SWAP IN")); } catch (Exception e) {}
             }
         } 
+    }
+
+    // --- NEW: Syncs live PCB objects directly into the memory array ---
+    private void syncAllPCBsToMemory() {
+        for (PCB pcb : allProcesses) {
+            if (pcb.minMemoryBoundary != -1 && pcb.state != State.FINISHED) {
+                memory.write(pcb.maxMemoryBoundary - 3, "PCB_ID=" + pcb.processID);
+                memory.write(pcb.maxMemoryBoundary - 2, "PCB_State=" + pcb.state);
+                memory.write(pcb.maxMemoryBoundary - 1, "PCB_PC=" + pcb.programCounter);
+                memory.write(pcb.maxMemoryBoundary, "PCB_Bounds=" + pcb.minMemoryBoundary + "-" + pcb.maxMemoryBoundary);
+            }
+        }
     }
 
     private void recordGantt(int pid, int start, int end) {
@@ -322,7 +332,7 @@ public class OperatingSystem {
         
         String instruction = memory.read(instructionAddress);
         
-        if (instruction == null || instruction.equals("EOF") || instruction.startsWith("VAR_")) {
+        if (instruction == null || instruction.equals("EOF") || instruction.startsWith("VAR_") || instruction.startsWith("PCB_")) {
             pcb.state = State.FINISHED;
             return false; 
         }
@@ -377,17 +387,18 @@ public class OperatingSystem {
         if (unblocked != null) addToReadyQueue(unblocked); 
     }
 
+    // --- REWRITTEN TO SCAN WHOLE BLOCK SAFELY ---
     private void setVariable(PCB pcb, String varName, String value) {
-        for (int i = pcb.maxMemoryBoundary - 2; i <= pcb.maxMemoryBoundary; i++) {
+        for (int i = pcb.minMemoryBoundary; i <= pcb.maxMemoryBoundary; i++) {
             String currentMem = memory.read(i);
-            if (currentMem == null || currentMem.startsWith("VAR_" + varName + "=") || currentMem.equals("EMPTY_VAR")) {
+            if (currentMem != null && (currentMem.startsWith("VAR_" + varName + "=") || currentMem.equals("EMPTY_VAR"))) {
                 memory.write(i, "VAR_" + varName + "=" + value); return;
             }
         }
     }
 
     private String getVariable(PCB pcb, String varName) {
-        for (int i = pcb.maxMemoryBoundary - 2; i <= pcb.maxMemoryBoundary; i++) {
+        for (int i = pcb.minMemoryBoundary; i <= pcb.maxMemoryBoundary; i++) {
             String currentMem = memory.read(i);
             if (currentMem != null && currentMem.startsWith("VAR_" + varName + "=")) return currentMem.split("=")[1];
         }
@@ -425,7 +436,8 @@ public class OperatingSystem {
             String line;
             while ((line = br.readLine()) != null) if (!line.trim().isEmpty()) instructions.add(line.trim());
             
-            int requiredSpace = instructions.size() + 3; 
+            // MATH: Instructions + 3 variables + 4 PCB slots
+            int requiredSpace = instructions.size() + 7; 
             int minBoundary = allocateMemorySpace(requiredSpace);
             
             while (minBoundary == -1) {
@@ -435,24 +447,29 @@ public class OperatingSystem {
                 if (victim == null) { for (PCB other : allProcesses) { if (other.minMemoryBoundary != -1 && other.state == State.FINISHED) { victim = other; break; } } }
                 
                 if (victim != null) {
+                    syncAllPCBsToMemory(); 
                     memory.swapToDisk(victim);
+                    
                     if(gui != null) {
                         String msg = "MEMORY FULL! PROCESS ID: [" + victim.processID + "] is being swapped OUT to Disk.";
                         gui.appendLog(">> " + msg);
                         try { javax.swing.SwingUtilities.invokeAndWait(() -> gui.showSwapNotification(msg, "CRITICAL: SWAP OUT")); } catch (Exception e) {}
                     }
+                    
                     victim.minMemoryBoundary = -1; victim.maxMemoryBoundary = -1;
                     minBoundary = allocateMemorySpace(requiredSpace);
                 } else { break; }
             }
 
             if (minBoundary != -1) {
+                int maxBoundary = minBoundary + requiredSpace - 1;
                 for (int i = 0; i < instructions.size(); i++) memory.write(minBoundary + i, instructions.get(i));
-                for (int i = (minBoundary + requiredSpace - 1) - 2; i <= (minBoundary + requiredSpace - 1); i++) memory.write(i, "EMPTY_VAR");
+                for (int i = minBoundary + instructions.size(); i <= maxBoundary - 4; i++) memory.write(i, "EMPTY_VAR");
 
-                PCB newPcb = new PCB(pid, minBoundary, (minBoundary + requiredSpace - 1), clock, instructions.size());
+                PCB newPcb = new PCB(pid, minBoundary, maxBoundary, clock, instructions.size());
                 allProcesses.add(newPcb);
                 addToReadyQueue(newPcb);
+                syncAllPCBsToMemory(); // Write initial PCB to memory immediately
             } 
         } catch (IOException e) { }
     }
@@ -491,6 +508,7 @@ public class OperatingSystem {
         }
 
         if (gui != null) {
+            syncAllPCBsToMemory(); // Force Visual Update
             String currentStr = current != null ? "P" + current.processID : "None";
             gui.updateDashboard(clock, currentStr, currentInstructionDisplay, currentExecutingAddress, getMemoryArray(), log.toString());
         }
